@@ -1,32 +1,39 @@
-from inventory import Inventory
 from collections import defaultdict
+
+from inventory import Inventory
 
 
 class AlertSystem:
-    def __init__(self, inventory: Inventory, low_stock_threshold=10):
+    def __init__(self, inventory: Inventory, low_stock_threshold=10, expiry_window_days=30):
         self.inventory = inventory
         self.low_stock_threshold = low_stock_threshold
+        self.expiry_window_days = expiry_window_days
 
-    def show_expiry_alerts(self):
-        print("\nExpiry Alerts:")
-        for name in self.inventory.meds_by_name:
-            for med in self.inventory.get_medicine_batches(name):
-                if med.days_until_expiry() <= 10:
-                    print(f"{med}")
+    def _batches(self):
+        for batches in self.inventory.meds_by_name.values():
+            yield from batches
 
-    def show_low_stock_alerts(self):
-        print("\nLow Stock Alerts:")
-        for name in self.inventory.meds_by_name:
-            stock_by_loc = defaultdict(int)
-            for med in self.inventory.get_medicine_batches(name):
-                stock_by_loc[med.location] += med.quantity
-            for loc, qty in stock_by_loc.items():
-                if qty < self.low_stock_threshold:
-                    print(f"{name} in {loc} is LOW on stock: {qty} units")
+    def expired(self):
+        """Expired batches that still hold stock: these must be pulled and disposed of."""
+        today = self.inventory.today
+        return [m for m in self._batches() if m.quantity > 0 and m.is_expired(today)]
 
-    def show_special_flags(self):
-        print("\nReserved/Blocked Batches:")
-        for name in self.inventory.meds_by_name:
-            for med in self.inventory.meds_by_name[name]:
-                if med.is_reserved or med.is_blocked:
-                    print(f"{med}")
+    def near_expiry(self):
+        today = self.inventory.today
+        return [m for m in self._batches()
+                if m.quantity > 0 and 0 <= m.days_until_expiry(today) <= self.expiry_window_days]
+
+    def low_stock(self):
+        """(name, location, usable_qty) for every location below the threshold."""
+        today = self.inventory.today
+        out = []
+        for name, batches in self.inventory.meds_by_name.items():
+            stock = defaultdict(int)
+            for m in batches:
+                stock[m.location] += 0 if (m.is_blocked or m.is_expired(today)) else m.quantity
+            out += [(name, loc, qty) for loc, qty in stock.items()
+                    if qty < self.low_stock_threshold]
+        return out
+
+    def flagged(self):
+        return [m for m in self._batches() if m.is_reserved or m.is_blocked]
